@@ -71,6 +71,8 @@ function usage () {
     echo -e "\t\t - Install cluster"
     echo -e "\t -u | --uninstall" 
     echo -e "\t\t - Uninstall cluster"
+    echo -e "\t -up | --upgrade" 
+    echo -e "\t\t - Upgrade cluster"
     echo -e "\t -b | -b=<COPYTODIR> | --backuplogs=<COPYTODIR>" 
     echo -e "\t\t - Backup /opt/mapr/logs/ directory on each node to COPYTODIR (default COPYTODIR : /tmp/)"
     
@@ -99,8 +101,6 @@ function usage () {
     
     echo 
 	echo " Post install Options : "
-    #echo -e "\t -r=[all|{IP}] | --restart  (default : all)" 
-    #echo -e "\t\t - Restart warden on all or specified nodes" 
     echo -e "\t -ct | --cldbtopo" 
     echo -e "\t\t - Move CLDB node & volume to /cldb topology"
     echo -e "\t -y | --ycsbvol" 
@@ -121,6 +121,7 @@ function usage () {
     echo -e "\t ./$me -c=maprdb -u"
     echo -e "\t ./$me -c=roles/pontis.roles -i -p -n=Pontis" 
     echo -e "\t ./$me -c=/root/configs/cluster.role -i -d=4 -sp=2" 
+    echo
 }
 
 while [ "$1" != "" ]; do
@@ -139,6 +140,9 @@ while [ "$1" != "" ]; do
     	-u | --uninstall)
     		setupop="uninstall"
     	;;
+        -up | --upgrade)
+            setupop="upgrade"
+        ;;
     	-c | --clusterconfig)
     		rolefile=$VALUE
     	;;

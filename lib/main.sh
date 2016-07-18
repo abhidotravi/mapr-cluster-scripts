@@ -54,7 +54,7 @@ if [ -n "$(cat $rolefile | grep '^[^#;]' | grep '\[')" ]; then
 fi
 
 # Fetch the nodes to be configured
-echo "Using cluster coniguration file : $rolefile "
+echo "Using cluster configuration file : $rolefile "
 nodes=$(maprutil_getNodesFromRole $rolefile)
 
 if [ -z "$nodes" ]; then
@@ -115,7 +115,7 @@ GLB_TABLET_DIST=
 function main_install(){
 	#set -x
 	# Warn user 
-	echo "Installing MapR on the following N-O-D-E-S : "
+	echo "$(util_getCurDate) Installing MapR on the following N-O-D-E-S : "
 	echo
 	local i=1
 	for node in ${nodes[@]}
@@ -161,7 +161,7 @@ function main_install(){
 			main_isValidBuildVersion
 			buildexists=$(maprutil_checkBuildExists "$node" "$GLB_BUILD_VERSION")
 			if [ -z "$buildexists" ]; then
-				echo "Specified build version [$GLB_BUILD_VERSION] doesn't exist in the configured repositories. Please check the repo file"
+				echo "{ERROR} Specified build version [$GLB_BUILD_VERSION] doesn't exist in the configured repositories. Please check the repo file"
 				exit 1
 			fi
 		fi
@@ -198,13 +198,144 @@ function main_install(){
 	# Perform custom executions
 
 	#set +x
+	echo "$(util_getCurDate) Install is complete! [ RunTime - $(main_timetaken) ]"
+}
 
+function main_upgrade(){
+	echo "Upgrading MapR on the following N-O-D-E-S : "
+	echo
+	local i=1
+	for node in ${nodes[@]}
+	do
+		echo "Node$i : $node"
+		let i=i+1
+	done
+
+	read -p "Press 'y' to confirm... " -n 1 -r
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    	echo "Upgrade C-A-N-C-E-L-L-E-D! "
+        return 1
+    fi
+    echo
+    echo "Checking if MapR is installed on the nodes..."
+	# Check if MapR is installed on all nodes
+	local notlist=
+	for node in ${nodes[@]}
+	do
+		local isInstalled=$(maprutil_isMapRInstalledOnNode "$node")
+		if [ "$isInstalled" != "true" ]; then
+			notlist=$notlist"$node"" "
+		else
+			#??? Get install version
+			echo "MapR is installed on node '$node' [ $(maprutil_getMapRVersionOnNode $node) ]"
+		fi
+	done
+
+	if [ -n "$notlist" ]; then
+		echo "MapR not installed on the node(s) [ $notlist]. Trying install on the nodes first. Scooting!"
+		exit 1
+	fi
+
+	local cldbnode=
+	local nocldblist=
+	# Check if each node points to the same CLDB master and the master is part of the cluster
+	for node in ${nodes[@]}
+	do
+		local cldbhost=$(maprutil_getCLDBMasterNode "$node")
+		if [ -z "$cldbhost" ]; then
+			echo " Unable to identifiy CLDB master on node [$node]"
+			nocldblist=$nocldblist$node" "
+		else
+			local cldbip=$cldbhost
+			if [ "$(util_validip $cldbhost)" = "invalid" ]; then
+				cldbip=$(util_getIPfromHostName "$cldbhost")
+			fi
+			local isone="false"
+			for nd in ${nodes[@]}
+			do
+				if [ "$nd" = "$cldbip" ]; then
+					isone="true"
+					break
+				fi
+			done
+			if [ "$isone" = "false" ]; then
+				echo " Node [$node] is not part of the same cluster. Scooting"
+			else
+				cldbnode="$cldbip"
+			fi
+		fi
+	done
+
+	if [ -n "$nocldblist" ]; then
+		echo "{WARNING} CLDB not found on nodes [$nocldblist]. May be uninstalling another cluster's nodes. Check the nodes specified."
+    	echo "Over & Out!"
+    	exit 1
+	else
+		echo "CLDB Master : $cldbnode"
+	fi
+
+	local cldbnodes=$(maprutil_getCLDBNodes "$rolefile")
+    local zknodes=$(maprutil_getZKNodes "$rolefile")
+    local maprrepo=$repodir"/mapr.repo"
+    local buildexists=
+
+    # First stop warden on all nodes
+	for node in ${nodes[@]}
+	do
+		# Copy mapr.repo if it doen't exist
+		maprutil_copyRepoFile "$node" "$maprrepo"
+		if [ -z "$buildexists" ] && [ -z "$(maprutil_checkNewBuildExists $node)" ]; then
+			echo "{ERROR} No newer build exists. Please check the repo file [$maprrepo] for configured repositories"
+			exit 1
+		fi
+		if [ -n "$GLB_BUILD_VERSION" ] && [ -z "$buildexists" ]; then
+			main_isValidBuildVersion
+			buildexists=$(maprutil_checkBuildExists "$node" "$GLB_BUILD_VERSION")
+			if [ -z "$buildexists" ]; then
+				echo "{ERROR} Specified build version [$GLB_BUILD_VERSION] doesn't exist in the configured repositories. Please check the repo file"
+				exit 1
+			else
+				echo "Stopping warden on all nodes..."
+			fi
+		fi
+		# Stop warden on all nodes
+		maprutil_restartWardenOnNode "$node" "$rolefile" "stop" &
+	done
+
+	echo "Stopping zookeeper..."
+	# Stop ZK on ZK nodes
+	for node in ${zknodes[@]}
+	do
+		maprutil_restartZKOnNode "$node" "$rolefile" "stop" &
+	done
+	wait
+	
+	# Kill all mapred jos & yarn applications
+
+	
+	# Upgrade rest of the nodes
+	echo "Upgrading MaPR on all nodes..."
+	for node in ${nodes[@]}
+	do	
+		maprutil_upgradeNode "$node" "bg"
+	done
+	wait
+
+	maprutil_postUpgrade "$cldbnode"
+	
+	for node in ${nodes[@]}
+	do
+		maprutil_restartWardenOnNode "$node" "$rolefile" &
+	done
+	wait
+
+	echo "$(util_getCurDate) Upgrade is complete! [ RunTime - $(main_timetaken) ]"
 }
 
 function main_uninstall(){
 
 	# Warn user 
-	echo "Uninstalling MapR on the following N-O-D-E-S : "
+	echo "$(util_getCurDate) Uninstalling MapR on the following N-O-D-E-S : "
 	echo
 	local i=1
 	for node in ${nodes[@]}
@@ -228,7 +359,7 @@ function main_uninstall(){
 		if [ "$isInstalled" != "true" ]; then
 			notlist=$notlist"$node"" "
 		else
-			echo "MapR is installed on node [$node]"
+			echo "MapR is installed on node '$node' [ $(maprutil_getMapRVersionOnNode $node) ]"
 		fi
 	done
 
@@ -315,11 +446,11 @@ function main_uninstall(){
 
 	wait
 
-	echo "Uninstall is complete!"
+	echo "$(util_getCurDate) Uninstall is complete! [ RunTime - $(main_timetaken) ]"
 }
 
 function main_backuplogs(){
-	echo "Backing up MapR log directory on all nodes to $doBackup"
+	echo "$(util_getCurDate) Backing up MapR log directory on all nodes to $doBackup"
 	local timestamp=$(date +%Y-%m-%d-%H-%M)
 	for node in ${nodes[@]}
 	do	
@@ -338,6 +469,8 @@ function main_backuplogs(){
 	echo "echo \"extracting tar\"" >> $scriptfile
 	echo "for i in \`ls *.tar\`;do DIR=\`echo \$i| sed 's/.tar//g'\`;echo \$DIR;mkdir -p \$DIR;tar -xf \$i -C \`pwd\`/\$DIR;done" >> $scriptfile
 	chmod +x $scriptfile
+
+	echo "$(util_getCurDate) Backup complete! [ RunTime - $(main_timetaken) ]"
 }
 
 function main_runCommandExec(){
@@ -366,7 +499,7 @@ function main_runLogDoctor(){
 		done
 	fi
 	if [ -n "$GLB_TABLET_DIST" ]; then
-		echo "Checking tablet distribution for file '$GLB_TABLET_DIST'"
+		echo "$(util_getCurDate) Checking tablet distribution for file '$GLB_TABLET_DIST'"
 		for node in ${nodes[@]}
 		do	
 			if [ -n "$(maprutil_isClientNode $rolefile $node)" ]; then
@@ -421,8 +554,15 @@ function main_usage () {
     
 }
 
+function main_timetaken(){
+	local ENDTS=$(date +%s);
+	echo $((ENDTS-STARTTS)) | awk '{print int($1/60)"min "int($1%60)"sec"}'
+}
+
+STARTTS=$(date +%s);
 doInstall=0
 doUninstall=0
+doUpgrade=0
 doCmdExec=
 doLogAnalyze=
 doDiskCheck=
@@ -448,6 +588,9 @@ while [ "$2" != "" ]; do
 		    	;;
 		    	uninstall)
 		    		doUninstall=1
+		    	;;
+		    	upgrade)
+		    		doUpgrade=1
 		    	;;
 		    esac
 		    ;;
@@ -541,6 +684,9 @@ if [ "$doInstall" -eq 1 ]; then
 elif [ "$doUninstall" -eq 1 ]; then
 	echo " *************** Starting Cluster Uninstallation **************** "
 	main_uninstall
+elif [ "$doUpgrade" -eq 1 ]; then
+	echo " *************** Starting Cluster Upgrade **************** "
+	main_upgrade
 elif [ -n "$doBackup" ]; then
 	echo " *************** Starting logs backup **************** "
 	main_backuplogs	
